@@ -8,7 +8,7 @@
 [![Audio](https://img.shields.io/badge/Audio-PipeWire%20%2F%20ALSA-green.svg)](https://pipewire.org)
 [![UI](https://img.shields.io/badge/UI-Libadwaita%20%2F%20GTK4-purple.svg)](https://gnome.pages.gitlab.gnome.org/libadwaita/)
 
-![ClickClick Settings UI](assets/screenshot.png)
+![ClickClick Libadwaita Interface](assets/clickclick-ui.png)
 
 ClickClick brings authentic, satisfying mechanical keyboard and mouse acoustics to your desktop with **true sub-millisecond reaction times**, direct hardware PipeWire integration, and a modern Libadwaita control panel.
 
@@ -102,6 +102,8 @@ clickclick gui
 # or directly:
 clickclick-settings
 ```
+
+![ClickClick Running on Desktop](assets/clickclick-desktop.png)
 
 ### Command Line Control
 ```bash
