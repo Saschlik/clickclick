@@ -1,5 +1,5 @@
 {
-  description = "Ultra-low latency mechanical keyboard & mouse acoustic feedback daemon for Linux";
+  description = "Low-latency mechanical keyboard & mouse acoustic feedback daemon for Linux";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -49,11 +49,14 @@
             cp ui/clickclick_gui.py $out/lib/clickclick/
 
             mkdir -p $out/bin
-            cp bin/clickclick $out/bin/clickclick-cli
+            install -Dm755 bin/clickclick $out/bin/clickclick
+            ln -sf clickclick $out/bin/clickclick-cli
+            ln -sf clickclick $out/bin/clickclick-ctl
+            install -Dm755 ui/clickclick_gui.py $out/bin/clickclick-settings
           '';
 
           meta = with pkgs.lib; {
-            description = "Ultra-low latency mechanical keyboard acoustic feedback daemon";
+            description = "Low-latency mechanical keyboard acoustic feedback daemon and Libadwaita GUI";
             homepage = "https://github.com/saschlik/clickclick";
             license = licenses.mit;
             platforms = platforms.linux;

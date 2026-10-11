@@ -2,12 +2,17 @@
 name = "clickclick"
 version = "1.0.0"
 edition = "2021"
-authors = ["Saschlik <sascha@balonix.org>"]
+authors = ["Saschlik <sebalo.aleksander@googlemail.com>"]
 description = "Ultra-low latency mechanical keyboard & mouse acoustic feedback daemon for Linux (evdev + PipeWire)"
 license = "MIT"
 repository = "https://github.com/saschlik/clickclick"
 keywords = ["keyboard", "audio", "evdev", "pipewire", "mechanical-keyboard"]
 categories = ["multimedia::audio", "command-line-utilities"]
+default-run = "clickclickd"
+
+[[bin]]
+name = "clickclickd"
+path = "src/main.rs"
 
 [dependencies]
 evdev = { version = "0.12", features = ["tokio"] }

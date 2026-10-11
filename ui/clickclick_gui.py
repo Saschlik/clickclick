@@ -4,33 +4,59 @@ ClickClick Settings GUI (Standalone GNOME / Libadwaita App)
 Modern configuration interface for the ClickClick mechanical keyboard acoustic feedback engine.
 """
 import os
+import re
 import sys
+import signal
 import subprocess
 import glob
 import shutil
-import gi
 
+if "GI_TYPELIB_PATH" not in os.environ:
+    wrapper_path = "/run/current-system/sw/bin/balonix-settings"
+    if os.path.exists(wrapper_path):
+        try:
+            with open(wrapper_path, "rb") as f:
+                content = f.read().decode("latin1", errors="ignore")
+            m_gi = re.search(r"(/nix/store/[^\x00]+libadwaita[^\x00]+girepository-1\.0)", content)
+            m_mod = re.search(r"(/nix/store/[^\x00]+dconf[^\x00]+gio/modules)", content)
+            m_pix = re.search(r"(/nix/store/[^\x00]+librsvg[^\x00]+loaders\.cache)", content)
+            m_xdg = re.search(r"(/nix/store/[^\x00]+gsettings-desktop-schemas[^\x00]+gtk4[^\x00]+)", content)
+            if m_gi:
+                os.environ["GI_TYPELIB_PATH"] = m_gi.group(1)
+            if m_mod:
+                os.environ["GIO_EXTRA_MODULES"] = m_mod.group(1)
+            if m_pix:
+                os.environ["GDK_PIXBUF_MODULE_FILE"] = m_pix.group(1)
+            if m_xdg:
+                os.environ["XDG_DATA_DIRS"] = m_xdg.group(1) + ":" + os.environ.get("XDG_DATA_DIRS", "/usr/share")
+        except Exception:
+            pass
+
+import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib, Gio
 
 HOME = os.path.expanduser("~")
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 REPO_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 # Locate CLI runner
-found_cli = shutil.which("clickclick")
-if found_cli and found_cli != os.path.abspath(__file__):
-    CLICKCLICK_CLI: str = str(found_cli)
-elif os.path.exists(os.path.join(REPO_DIR, "bin/clickclick")):
-    CLICKCLICK_CLI = os.path.join(REPO_DIR, "bin/clickclick")
-elif os.path.exists(os.path.join(SCRIPT_DIR, "clickclick")):
-    CLICKCLICK_CLI = os.path.join(SCRIPT_DIR, "clickclick")
-else:
-    CLICKCLICK_CLI = "clickclick"
+CLICKCLICK_CLI = "clickclick"
+for cand in [
+    os.path.join(SCRIPT_DIR, "clickclick"),
+    os.path.join(REPO_DIR, "bin/clickclick"),
+    shutil.which("clickclick") or "",
+    "/usr/local/bin/clickclick",
+    "/usr/bin/clickclick",
+]:
+    if cand and os.path.isfile(cand) and os.path.realpath(cand) != os.path.realpath(__file__):
+        CLICKCLICK_CLI = cand
+        break
 
 CONFIG_DIR = os.path.join(HOME, ".config/clickclick")
 PRESETS_DIR = os.path.join(CONFIG_DIR, "presets")
+PID_FILE = os.path.join(CONFIG_DIR, "daemon.pid")
 
 
 class ClickClickApp(Adw.Application):
@@ -84,7 +110,7 @@ class ClickClickWindow(Adw.ApplicationWindow):
         # ── Group 1: Engine Status & Master Switch ────────────────────────────
         group_master = Adw.PreferencesGroup()
         group_master.set_title("Engine Status")
-        group_master.set_description("Background daemon providing ultra-low latency acoustic feedback (0 ms).")
+        group_master.set_description("Background daemon providing sub-millisecond acoustic feedback (~1.3 ms quantum).")
 
         self.master_switch = Adw.SwitchRow()
         self.master_switch.set_title("Acoustic Key Feedback")
@@ -152,9 +178,9 @@ class ClickClickWindow(Adw.ApplicationWindow):
 
         self.routing_row = Adw.ComboRow()
         self.routing_row.set_title("Audio Output Path")
-        self.routing_row.set_subtitle("Direct hardware path delivers 0 ms audio reaction time")
+        self.routing_row.set_subtitle("Direct hardware path bypasses intermediate filter chains for lowest latency")
         self.routing_modes = [
-            ("Direct Hardware DAC (0 ms latency)", "direct"),
+            ("Direct Hardware DAC (Low-Latency)", "direct"),
             ("3D HRTF Surround (HeSuVi / Spatial Filter Chain)", "surround"),
             ("System Default (PipeWire Default Output)", "default"),
         ]
@@ -204,27 +230,57 @@ class ClickClickWindow(Adw.ApplicationWindow):
         except Exception:
             return ""
 
-    def on_play_test_click(self, btn):
-        active_wav = os.path.join(CONFIG_DIR, "active/space.wav")
-        if not os.path.exists(active_wav):
-            active_wav = os.path.join(CONFIG_DIR, "active/enter.wav")
-        if not os.path.exists(active_wav):
-            wavs = glob.glob(os.path.join(CONFIG_DIR, "active/*.wav"))
-            if wavs:
-                active_wav = wavs[0]
+    def get_daemon_pid(self):
+        if os.path.exists(PID_FILE):
+            try:
+                with open(PID_FILE, "r") as f:
+                    pid_str = f.read().strip()
+                if pid_str.isdigit():
+                    pid = int(pid_str)
+                    os.kill(pid, 0)
+                    return str(pid)
+            except Exception:
+                pass
+        out = self.run_cmd(["pgrep", "-f", r"(^|/)((\.)?clickclickd(-wrapped)?|clickclick_rs)( |$)"])
+        if out:
+            return out.splitlines()[0].strip()
+        return ""
 
-        if os.path.exists(active_wav):
-            subprocess.Popen(["pw-play", active_wav])
+    def signal_daemon(self, sig):
+        pid = self.get_daemon_pid()
+        if pid and pid.isdigit():
+            try:
+                os.kill(int(pid), sig)
+            except Exception:
+                pass
+
+    def on_play_test_click(self, btn):
+        candidates = [
+            os.path.join(CONFIG_DIR, "active/space.wav"),
+            os.path.join(CONFIG_DIR, "active/enter.wav"),
+            os.path.join(CONFIG_DIR, "active/key_57.ogg"),
+            os.path.join(CONFIG_DIR, "active/key_28.ogg"),
+        ]
+        active_sample = next((p for p in candidates if os.path.exists(p)), "")
+        if not active_sample:
+            samples = sorted(
+                glob.glob(os.path.join(CONFIG_DIR, "active/*.wav"))
+                + glob.glob(os.path.join(CONFIG_DIR, "active/*.ogg"))
+            )
+            if samples:
+                active_sample = samples[0]
+
+        if active_sample and os.path.exists(active_sample):
+            subprocess.Popen(["pw-play", active_sample])
 
     def refresh_state(self):
         self._updating = True
         try:
             # Running state
-            pid = self.run_cmd(["pgrep", "-x", "clickclick"]) or self.run_cmd(["pgrep", "-x", "clickclick_rs"])
-            is_running = bool(pid)
+            first_pid = self.get_daemon_pid()
+            is_running = bool(first_pid)
             self.master_switch.set_active(is_running)
             if is_running:
-                first_pid = pid.split()[0]
                 self.status_badge.set_text(f"Running (PID {first_pid})")
                 self.status_badge.remove_css_class("error")
                 self.status_badge.add_css_class("success")
@@ -313,6 +369,8 @@ class ClickClickWindow(Adw.ApplicationWindow):
         if self._updating:
             return
         active = row.get_active()
+        if not active:
+            self.signal_daemon(signal.SIGTERM)
         cmd = [CLICKCLICK_CLI, "start" if active else "stop"]
         subprocess.run(cmd)
         GLib.timeout_add(300, self.refresh_state)
@@ -329,24 +387,38 @@ class ClickClickWindow(Adw.ApplicationWindow):
     def on_vol_changed(self, scale):
         if self._updating:
             return
-        val = int(round(scale.get_value()))
-        subprocess.run([CLICKCLICK_CLI, "volume", str(val)])
+        val = max(0.0, min(2.0, round(scale.get_value()) / 100.0))
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        try:
+            with open(os.path.join(CONFIG_DIR, "volume.txt"), "w") as f:
+                f.write(f"{val:.2f}\n")
+        except Exception:
+            pass
+        self.signal_daemon(signal.SIGUSR2)
 
     def on_hum_changed(self, row, param):
         if self._updating:
             return
         active = row.get_active()
-        subprocess.run([CLICKCLICK_CLI, "humanize", "on" if active else "off"])
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        try:
+            with open(os.path.join(CONFIG_DIR, "humanize.txt"), "w") as f:
+                f.write("true\n" if active else "false\n")
+        except Exception:
+            pass
+        self.signal_daemon(signal.SIGUSR2)
 
     def on_mice_changed(self, row, param):
         if self._updating:
             return
         active = row.get_active()
-        with open(os.path.join(CONFIG_DIR, "enable_mice.txt"), "w") as f:
-            f.write("true" if active else "false")
-        if bool(self.run_cmd(["pgrep", "-x", "clickclick"]) or self.run_cmd(["pgrep", "-x", "clickclick_rs"])):
-            subprocess.run([CLICKCLICK_CLI, "start"])
-        GLib.timeout_add(200, self.refresh_state)
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        try:
+            with open(os.path.join(CONFIG_DIR, "enable_mice.txt"), "w") as f:
+                f.write("true\n" if active else "false\n")
+        except Exception:
+            pass
+        self.signal_daemon(signal.SIGUSR2)
 
     def on_routing_selected(self, row, param):
         if self._updating:

@@ -116,6 +116,24 @@
     "61008": "v.wav",
     "61009": "m.wav",
     "61010": "h.wav",
-    "61011": "b.wav"
+    "61011": "b.wav",
+    "96": "enter.wav",
+    "97": "space.wav",
+    "98": "a.wav",
+    "99": "a.wav",
+    "100": "space.wav",
+    "102": "a.wav",
+    "103": "e.wav",
+    "104": "i.wav",
+    "105": "o.wav",
+    "106": "u.wav",
+    "107": "a.wav",
+    "108": "e.wav",
+    "109": "i.wav",
+    "110": "o.wav",
+    "111": "backspace.wav",
+    "125": "space.wav",
+    "126": "space.wav",
+    "127": "space.wav"
   }
 }

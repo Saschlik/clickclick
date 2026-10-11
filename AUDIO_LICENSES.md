@@ -1,18 +1,18 @@
 # 🎵 ClickClick — Audio Assets & Licensing
 
-All sound effects, switch profiles, and mouse recordings included in **ClickClick** are free, open-source, or public domain assets.
+All sound effects, switch profiles, and mouse click samples included in **ClickClick** are distributed under the **MIT License**.
 
 ---
 
 ## 1. Summary Table
 
-| Sound Pack / Asset | Switch / Type | Original Source | License | Author / Attribution |
+| Sound Pack / Asset | Switch / Type | Upstream Origin | License | Attribution |
 |---|---|---|---|---|
 | `presets/nk_cream` | NovelKeys Cream (Linear Smooth) | [Mechvibes](https://github.com/hainguyents13/mechvibes) (`src/audio/cream-travel`) | **MIT License** | Hai Nguyen & Mechvibes Contributors |
-| `presets/cherry_mx_black_pbt` | Cherry MX Black (Linear Heavy PBT) | [kbsim](https://github.com/tplai/kbsim) / Mechvibes | **MIT License** | Thomas Lai / Mechvibes Community |
-| `presets/unicomp_classic` | Unicomp Buckling Spring (Clicky) | FOSS Audio Archive | **CC0 / MIT** | Public Domain Sound Archive |
-| `presets/default_clicky` | Classic Tactile / Clicky Switch | FOSS Sound Archive | **CC0 / MIT** | Public Domain / CC0 |
-| `presets/mouse.wav` | Clean Tactile Mouse Click | Balonix Studio Microphone Recording | **CC0 1.0 Universal** | Saschlik (BalonixOS Project) |
+| `presets/cherry_mx_black_pbt` | Cherry MX Black (Linear Heavy PBT) | [Mechvibes](https://github.com/hainguyents13/mechvibes) (`cherrymx-black-pbt`) / [kbsim](https://github.com/tplai/kbsim) | **MIT License** | Hai Nguyen, Thomas Lai & Mechvibes Contributors |
+| `presets/unicomp_classic` | Unicomp Buckling Spring (Clicky) | Mechvibes Community Sound Pack | **MIT License** | Mechvibes Community Contributors |
+| `presets/default_clicky` | Classic Tactile / Clicky Switch | kbsim / Mechvibes Community Sound Pack | **MIT License** | Thomas Lai & Mechvibes Contributors |
+| `presets/mouse.wav` | Clean Tactile Mouse Click (22 ms) | DSP high-pass (1.8 kHz) & envelope-shaped transient derived from [Mechvibes](https://github.com/hainguyents13/mechvibes) (`nk_cream`) | **MIT License** | Hai Nguyen & Mechvibes Contributors |
 
 ---
 
@@ -21,18 +21,18 @@ All sound effects, switch profiles, and mouse recordings included in **ClickClic
 ### Mechvibes
 * **Repository:** https://github.com/hainguyents13/mechvibes
 * **License:** MIT License (Copyright © 2020 Hai Nguyen)
-* **Description:** Mechanical keyboard sound simulator for desktop platforms.
+* **Description:** Open-source mechanical keyboard sound simulator and switch sound pack collection for desktop platforms.
 
 ### kbsim
 * **Repository:** https://github.com/tplai/kbsim
 * **License:** MIT License (Copyright © Thomas Lai)
-* **Description:** Keyboard sound simulation library and acoustic samples.
+* **Description:** Keyboard sound simulation library and acoustic switch samples.
 
 ---
 
 ## 3. License Texts
 
-### MIT License (for Mechvibes & kbsim audio packs)
+### MIT License (Mechvibes & kbsim audio packs)
 
 ```text
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -54,5 +54,3 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Creative Commons CC0 1.0 Universal (Public Domain Dedication)
-To the extent possible under law, the authors of the CC0-designated assets in this repository have waived all copyright and related or neighboring rights to these works worldwide.

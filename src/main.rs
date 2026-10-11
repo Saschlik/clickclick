@@ -9,6 +9,7 @@ use std::env;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
@@ -60,6 +61,19 @@ fn load_humanize_config(config_dir: &Path) -> bool {
         return val == "true" || val == "1" || val == "on";
     }
     true // default to organic subtle variation
+}
+
+fn load_mice_config(config_dir: &Path) -> bool {
+    let m_path = config_dir.join("enable_mice.txt");
+    if let Ok(content) = fs::read_to_string(&m_path) {
+        let val = content.trim().to_lowercase();
+        return val == "true" || val == "1" || val == "on";
+    }
+    if let Ok(env_m) = env::var("ENABLE_MICE") {
+        let val = env_m.trim().to_lowercase();
+        return val == "true" || val == "1" || val == "on";
+    }
+    true
 }
 
 fn start_audio_engine(
@@ -164,13 +178,13 @@ fn start_audio_engine(
 
 fn print_help() {
     println!(
-        "\x1b[1;32mClickClick\x1b[0m v{} — Ultra-low latency mechanical acoustic feedback daemon for Linux
+        "\x1b[1;32mClickClick Daemon (clickclickd)\x1b[0m v{} — Low-latency mechanical acoustic feedback daemon for Linux
 Usage:
-  clickclick [OPTIONS] [ASSET_DIR]
+  clickclickd [OPTIONS] [ASSET_DIR]
 
 Arguments:
-  [ASSET_DIR]    Path to switch preset directory containing config.json and wav files
-                 (Default: ~/.config/clickclick/active or ./presets/nk_cream)
+  [ASSET_DIR]    Path to switch preset directory containing config.json and audio files
+                 (Default: ~/.config/clickclick/active or system/repo presets/nk_cream)
 
 Options:
   -h, --help     Print this help message
@@ -178,9 +192,27 @@ Options:
 
 Signals:
   SIGUSR1        Reconnect audio output stream (e.g. after PipeWire default sink switch)
-  SIGUSR2        Hot-reload volume and humanization settings without restarting",
+  SIGUSR2        Hot-reload volume, humanization, and mouse click settings without restarting",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+fn resolve_default_asset_dir() -> Option<PathBuf> {
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let mut candidates = vec![
+        PathBuf::from(&home).join(".config/clickclick/active"),
+        PathBuf::from("presets/nk_cream"),
+    ];
+    if let Ok(exe) = env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            candidates.push(bin_dir.join("../share/clickclick/presets/nk_cream"));
+            candidates.push(bin_dir.join("../presets/nk_cream"));
+        }
+    }
+    candidates.push(PathBuf::from("/usr/local/share/clickclick/presets/nk_cream"));
+    candidates.push(PathBuf::from("/usr/share/clickclick/presets/nk_cream"));
+
+    candidates.into_iter().find(|p| p.join("config.json").exists())
 }
 
 #[tokio::main]
@@ -196,29 +228,34 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     if args.iter().any(|a| a == "-V" || a == "--version") {
-        println!("clickclick {}", env!("CARGO_PKG_VERSION"));
+        println!("clickclickd {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
     let asset_dir: PathBuf = if args.len() > 1 && !args[1].starts_with('-') {
         PathBuf::from(&args[1])
+    } else if let Some(found) = resolve_default_asset_dir() {
+        found
     } else {
-        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let active = PathBuf::from(&home).join(".config/clickclick/active");
-        if active.exists() {
-            active
-        } else if Path::new("presets/nk_cream").exists() {
-            PathBuf::from("presets/nk_cream")
+        eprintln!("\x1b[1;31m[ERROR]\x1b[0m No sound preset found! Provide a path: clickclickd <asset_dir>");
+        std::process::exit(1);
+    };
+
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let config_dir: PathBuf = {
+        let default_cfg = PathBuf::from(&home).join(".config/clickclick");
+        if default_cfg.exists() || fs::create_dir_all(&default_cfg).is_ok() {
+            default_cfg
         } else {
-            eprintln!("\x1b[1;31m[ERROR]\x1b[0m No sound preset found! Provide a path: clickclick <asset_dir>");
-            std::process::exit(1);
+            asset_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| asset_dir.clone())
         }
     };
 
-    let config_dir: PathBuf = asset_dir
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| asset_dir.clone());
+    let pid_file = config_dir.join("daemon.pid");
+    let _ = fs::write(&pid_file, format!("{}\n", std::process::id()));
 
     let enable_trackpads = env::var("ENABLE_TRACKPADS")
         .unwrap_or_else(|_| "false".to_string())
@@ -233,7 +270,13 @@ async fn main() -> anyhow::Result<()> {
 
     let initial_volume = load_volume_config(&config_dir);
     let initial_humanize = load_humanize_config(&config_dir);
-    println!("\x1b[1;34m[INIT]\x1b[0m Volume: {:.2}, Humanize variation: {}", initial_volume, initial_humanize);
+    let initial_mice = load_mice_config(&config_dir);
+    let enable_mice = Arc::new(AtomicBool::new(initial_mice));
+
+    println!(
+        "\x1b[1;34m[INIT]\x1b[0m Volume: {:.2}, Humanize: {}, Mouse Clicks: {}",
+        initial_volume, initial_humanize, initial_mice
+    );
 
     let audio_tx = start_audio_engine(initial_volume, initial_humanize);
 
@@ -247,14 +290,18 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Watch for SIGUSR2 (config reload: volume/humanize)
+    // Watch for SIGUSR2 (config reload: volume/humanize/mice)
     let audio_tx_sig2 = audio_tx.clone();
     let config_dir_sig = config_dir.clone();
+    let enable_mice_sig = enable_mice.clone();
     tokio::spawn(async move {
         if let Ok(mut sig) = signal(SignalKind::user_defined2()) {
             while sig.recv().await.is_some() {
                 let v = load_volume_config(&config_dir_sig);
                 let h = load_humanize_config(&config_dir_sig);
+                let m = load_mice_config(&config_dir_sig);
+                enable_mice_sig.store(m, Ordering::Relaxed);
+                println!("\x1b[1;36m[AUDIO]\x1b[0m Mouse clicks mode: {}", m);
                 let _ = audio_tx_sig2.send(AudioCmd::SetVolume(v));
                 let _ = audio_tx_sig2.send(AudioCmd::SetHumanize(h));
             }
@@ -403,6 +450,7 @@ async fn main() -> anyhow::Result<()> {
                 let cache = cache_arc.clone();
                 let defaults = defaults_arc.clone();
                 let mouse_sound = mouse_sound_arc.clone();
+                let mice_enabled = enable_mice.clone();
                 let audio_tx = audio_tx.clone();
                 let tx = tx_dead.clone();
                 
@@ -413,8 +461,10 @@ async fn main() -> anyhow::Result<()> {
                                 if let InputEventKind::Key(key) = event.kind() {
                                     let code = key.0 as usize;
                                     if (272..=319).contains(&code) {
-                                        if let Some(ref m_sound) = *mouse_sound {
-                                            let _ = audio_tx.send(AudioCmd::Play(m_sound.clone()));
+                                        if mice_enabled.load(Ordering::Relaxed) {
+                                            if let Some(ref m_sound) = *mouse_sound {
+                                                let _ = audio_tx.send(AudioCmd::Play(m_sound.clone()));
+                                            }
                                         }
                                         continue;
                                     }

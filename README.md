@@ -1,6 +1,6 @@
 # ClickClick ⌨️🎵
 
-> **Ultra-low latency mechanical keyboard & mouse acoustic feedback daemon for Linux (Wayland & X11).**
+> **Low-latency mechanical keyboard & mouse acoustic feedback daemon for Linux (Wayland & X11).**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/Rust-2021%20Edition-orange.svg)](https://www.rust-lang.org/)
@@ -10,34 +10,34 @@
 
 ![ClickClick Libadwaita Interface](assets/clickclick-ui.png)
 
-ClickClick brings authentic, satisfying mechanical keyboard and mouse acoustics to your desktop with **true sub-millisecond reaction times**, direct hardware PipeWire integration, and a modern Libadwaita control panel.
+ClickClick brings authentic, satisfying mechanical keyboard and mouse acoustics to your desktop with **sub-millisecond input reaction times**, direct hardware PipeWire integration, and a modern Libadwaita control panel.
 
 ---
 
 ## ✨ Key Features
 
-* **⚡ 0 ms Input Latency:** Directly monitors Linux kernel raw input devices (`/dev/input/event*`) via async `evdev`. No windowing server lag, no compositor overhead, and zero key interception delay.
+* **⚡ Sub-Millisecond Input Handling:** Directly monitors Linux kernel raw input devices (`/dev/input/event*`) via async `evdev` and plays pre-decoded in-memory PCM samples over a 64-sample (`~1.3 ms`) PipeWire quantum.
 * **🎧 PipeWire & Direct DAC Routing:**
-  * **Direct Hardware DAC Mode:** Routes sound directly to your headphone amplifier/DAC with 0 ms audio buffer delay.
-  * **3D HRTF Convolution Mode:** Integrates seamlessly with virtual 7.1 surround sound and spatial audio filter chains (e.g. HeSuVi / KEMAR).
+  * **Direct Hardware DAC Mode:** Routes sound directly to your headphone amplifier/DAC, bypassing intermediate desktop filter chains.
+  * **3D HRTF Convolution Mode:** Integrates seamlessly with virtual 7.1 surround sound and spatial audio filter chains (e.g. SpatialWire / HeSuVi).
 * **🔌 Dynamic Hotplug Support:** Seamlessly transitions when plugging, unplugging, or switching between wired USB-C, 2.4 GHz wireless dongles, and Bluetooth keyboards.
 * **🍃 Organic Humanization:** Prevents the repetitive "machine-gun effect" through subtle micro-variations (±2.5% pitch and dynamic velocity jitter) on every keystroke.
-* **🖱️ Mouse Click Acoustics:** Optional high-precision tactile click feedback for mice (e.g. Razer Basilisk, Logitech G Pro, Glorious).
+* **🖱️ Mouse Click Acoustics:** Optional tactile click feedback for mouse buttons, hot-reloadable at runtime.
 * **🎨 Modern Libadwaita Interface:** Elegant GTK4 settings app featuring live daemon status, interactive switch preset picker, real-time volume slider, and one-click sound tests.
-* **📦 100% Free & Open Source (FOSS):** Bundled with vetted, MIT and CC0 licensed switch recordings.
+* **📦 100% Free & Open Source (FOSS):** Bundled with MIT and CC0 licensed switch recordings.
 
 ---
 
 ## 🎛️ Bundled Switch Profiles
 
-ClickClick includes high-quality, pre-decoded sound packs ready to use out of the box:
+ClickClick includes pre-decoded sound packs ready to use out of the box:
 
 | Switch Profile | Sound Character | Switch Type | Upstream License |
 |---|---|---|---|
 | **NovelKeys Cream** | Deep, smooth, satisfying "thock" | Linear | **MIT** (Mechvibes) |
-| **Cherry MX Black PBT** | Heavy, solid mechanical bottom-out | Linear Heavy | **MIT** (kbsim) |
-| **Unicomp Classic** | Crisp, vintage buckling spring click | Buckling Spring | **CC0 / Public Domain** |
-| **Default Clicky** | Sharp, tactile office click | Tactile Clicky | **CC0 / MIT** |
+| **Cherry MX Black PBT** | Heavy, solid mechanical bottom-out | Linear Heavy | **MIT** (Mechvibes / kbsim) |
+| **Unicomp Classic** | Crisp, vintage buckling spring click | Buckling Spring | **MIT** (Mechvibes Community) |
+| **Default Clicky** | Sharp, tactile office click | Tactile Clicky | **MIT** (kbsim / Mechvibes) |
 | **Tactile Mouse** | Soft, quiet optical/mechanical mouse switch | Micro-switch | **CC0 1.0 Universal** |
 
 *(For complete licensing and original creator attributions, see [AUDIO_LICENSES.md](AUDIO_LICENSES.md).)*
@@ -46,13 +46,15 @@ ClickClick includes high-quality, pre-decoded sound packs ready to use out of th
 
 ## 🚀 Installation
 
-### 1. Prerequisites (Input Permissions)
-ClickClick reads raw keyboard events from `/dev/input/event*`. Your user must be a member of the `input` group:
+### 1. Prerequisites & Security Note (Input Permissions)
+Because Wayland compositors isolate keyboard input between windows for security, ClickClick reads raw key-down events from `/dev/input/event*` via `evdev`. Your user must be a member of the `input` group:
 
 ```bash
 sudo usermod -aG input $USER
 ```
 *(Log out and back in once for the group membership to take effect).*
+
+> **Privacy & Security Note:** Membership in the `input` group grants read access to raw input devices for processes running under your user account. The `clickclickd` daemon (`src/main.rs`) only inspects `EV_KEY` key-down events (`value == 1`) to trigger an in-memory audio buffer and **never** logs, stores, or transmits keystrokes.
 
 ---
 
@@ -84,10 +86,10 @@ inputs = {
 git clone https://github.com/saschlik/clickclick.git
 cd clickclick
 
-# Build release binary
+# Build release binary (target/release/clickclickd)
 cargo build --release
 
-# Install binary, CLI helper, and desktop GUI
+# Install daemon (clickclickd), CLI controller (clickclick), and GUI (clickclick-settings)
 sudo make install
 ```
 
@@ -107,18 +109,19 @@ clickclick-settings
 
 ### Command Line Control
 ```bash
-clickclick start            # Start background daemon
+clickclick start            # Start background daemon (clickclickd)
 clickclick stop             # Stop background daemon
 clickclick status           # View active preset, volume, and routing state
 clickclick preset nk_cream  # Switch to NovelKeys Cream
 clickclick volume 85        # Set volume to 85%
+clickclick mice off         # Toggle mouse click acoustics on/off
 clickclick test             # Play a test sample of the current preset
 ```
 
 ### Signal Control (Instant Hot-Reload)
-ClickClick supports zero-downtime Unix signal control:
+`clickclickd` supports zero-downtime Unix signal control:
 * `SIGUSR1`: Re-anchors the audio output stream (e.g. after changing default audio sinks).
-* `SIGUSR2`: Hot-reloads volume and humanization settings without restarting the daemon.
+* `SIGUSR2`: Hot-reloads volume, humanization, and mouse click settings without restarting the daemon.
 
 ---
 
@@ -129,16 +132,16 @@ ClickClick supports zero-downtime Unix signal control:
 │                   Linux Kernel                        │
 │             /dev/input/event* (evdev)                  │
 └──────────────────────────┬─────────────────────────────┘
-                           │ Raw Key Down (1) [0 ms latency]
+                           │ Raw Key Down (value == 1)
                            ▼
 ┌────────────────────────────────────────────────────────┐
-│                 ClickClick Core (Rust)                 │
+│              ClickClick Daemon (clickclickd)           │
 │  - Async Tokio event loop                              │
 │  - Dynamic Hotplug discovery                           │
 │  - In-Memory pre-decoded audio buffers                 │
 │  - Micro-jitter humanization algorithm                 │
 └──────────────────────────┬─────────────────────────────┘
-                           │ Sub-millisecond stream
+                           │ 64/48000 quantum (~1.3 ms)
                            ▼
 ┌────────────────────────────────────────────────────────┐
 │                   PipeWire / ALSA                      │
@@ -151,4 +154,5 @@ ClickClick supports zero-downtime Unix signal control:
 ## 📜 License
 
 * **Code:** Licensed under the [MIT License](LICENSE). Copyright © 2026 Sascha (Saschlik).
-* **Audio Assets:** Licensed under MIT / CC0. See [AUDIO_LICENSES.md](AUDIO_LICENSES.md) for full attribution.
+* **Audio Assets:** Licensed under the **MIT License**. See [AUDIO_LICENSES.md](AUDIO_LICENSES.md) for full upstream attribution.
+

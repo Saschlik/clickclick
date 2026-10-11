@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# CLICKCLICK - HIGH-PERFORMANCE KEYBOARD & MOUSE ACOUSTIC FEEDBACK (evdev + PipeWire)
+# CLICKCLICK - LOW-LATENCY KEYBOARD & MOUSE ACOUSTIC FEEDBACK (evdev + PipeWire)
 # ==============================================================================
 
 set -euo pipefail
@@ -9,21 +9,23 @@ trap cleanup EXIT INT TERM
 readonly APP_NAME="clickclick"
 readonly CONFIG_ENABLE_TRACKPADS="false"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Discover ClickClick binary
+# Discover ClickClick daemon binary (clickclickd)
 BIN_PATH=""
-if command -v clickclick >/dev/null && [[ "$(command -v clickclick)" != "${BASH_SOURCE[0]}" ]]; then
-    BIN_PATH="$(command -v clickclick)"
-elif [[ -x "$REPO_DIR/target/release/clickclick" ]]; then
-    BIN_PATH="$REPO_DIR/target/release/clickclick"
-elif [[ -x "/usr/local/bin/clickclick" ]]; then
-    BIN_PATH="/usr/local/bin/clickclick"
+if [[ -x "$SCRIPT_DIR/clickclickd" ]]; then
+    BIN_PATH="$SCRIPT_DIR/clickclickd"
+elif command -v clickclickd >/dev/null 2>&1; then
+    BIN_PATH="$(command -v clickclickd)"
+elif [[ -x "$REPO_DIR/target/release/clickclickd" ]]; then
+    BIN_PATH="$REPO_DIR/target/release/clickclickd"
+elif [[ -x "/usr/local/bin/clickclickd" ]]; then
+    BIN_PATH="/usr/local/bin/clickclickd"
+elif [[ -x "/usr/bin/clickclickd" ]]; then
+    BIN_PATH="/usr/bin/clickclickd"
 elif [[ -x "$REPO_DIR/target/release/clickclick_rs" ]]; then
     BIN_PATH="$REPO_DIR/target/release/clickclick_rs"
-elif [[ -x "/usr/bin/clickclick" ]]; then
-    BIN_PATH="/usr/bin/clickclick"
 fi
 
 readonly CONFIG_DIR="$HOME/.config/clickclick"
@@ -33,6 +35,8 @@ readonly ACTIVE_FILE="${CONFIG_DIR}/active_preset.txt"
 readonly SINK_FILE="${CONFIG_DIR}/sink_mode.txt"
 readonly VOLUME_FILE="${CONFIG_DIR}/volume.txt"
 readonly HUMANIZE_FILE="${CONFIG_DIR}/humanize.txt"
+readonly MICE_FILE="${CONFIG_DIR}/enable_mice.txt"
+readonly PID_FILE="${CONFIG_DIR}/daemon.pid"
 
 # --- ANSI COLORS ---
 readonly C_RED=$'\033[1;31m'
@@ -54,9 +58,60 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 notify_user() {
-    if command -v notify-send >/dev/null; then
+    if command -v notify-send >/dev/null 2>&1; then
         notify-send --app-name="ClickClick" "ClickClick" "$1"
     fi
+}
+
+get_daemon_pids() {
+    local pids=()
+    if [[ -f "$PID_FILE" ]]; then
+        local fpid
+        fpid="$(tr -d '[:space:]' < "$PID_FILE" 2>/dev/null || true)"
+        if [[ "$fpid" =~ ^[0-9]+$ ]] && kill -0 "$fpid" 2>/dev/null; then
+            if tr '\0' ' ' < "/proc/$fpid/cmdline" 2>/dev/null | grep -qi "clickclick"; then
+                pids+=("$fpid")
+            fi
+        fi
+    fi
+    while IFS= read -r p; do
+        [[ -z "$p" || "$p" == "$$" ]] && continue
+        local dup=0
+        for existing in "${pids[@]:-}"; do
+            [[ "$existing" == "$p" ]] && dup=1 && break
+        done
+        [[ $dup -eq 0 ]] && pids+=("$p")
+    done < <(pgrep -f "(^|/)((\.)?clickclickd(-wrapped)?|clickclick_rs)( |$)" 2>/dev/null || true)
+
+    if (( ${#pids[@]} > 0 )); then
+        printf '%s\n' "${pids[@]}"
+    fi
+}
+
+is_daemon_running() {
+    [[ -n "$(get_daemon_pids)" ]]
+}
+
+signal_daemon() {
+    local sig="$1"
+    local pid
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] && kill "-${sig}" "$pid" 2>/dev/null || true
+    done < <(get_daemon_pids)
+}
+
+stop_daemon() {
+    local pid
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    done < <(get_daemon_pids)
+
+    local retries=20
+    while is_daemon_running && (( retries > 0 )); do
+        sleep 0.05
+        (( retries-- ))
+    done
+    rm -f "$PID_FILE" 2>/dev/null || true
 }
 
 get_active_preset() {
@@ -70,15 +125,20 @@ get_active_preset() {
 }
 
 ensure_presets_installed() {
+    mkdir -p "$CONFIG_DIR"
     if [[ ! -d "$PRESETS_DIR" || -z "$(ls -A "$PRESETS_DIR" 2>/dev/null)" ]]; then
         mkdir -p "$PRESETS_DIR"
-        if [[ -d "$REPO_DIR/presets" ]]; then
-            cp -r "$REPO_DIR/presets"/* "$PRESETS_DIR"/
-        elif [[ -d "/usr/local/share/clickclick/presets" ]]; then
-            cp -r /usr/local/share/clickclick/presets/* "$PRESETS_DIR"/
-        elif [[ -d "/usr/share/clickclick/presets" ]]; then
-            cp -r /usr/share/clickclick/presets/* "$PRESETS_DIR"/
-        fi
+        for src_dir in \
+            "$REPO_DIR/presets" \
+            "$REPO_DIR/share/clickclick/presets" \
+            "/usr/local/share/clickclick/presets" \
+            "/usr/share/clickclick/presets"; do
+            if [[ -d "$src_dir" && -n "$(ls -A "$src_dir" 2>/dev/null)" ]]; then
+                cp -r "$src_dir"/* "$PRESETS_DIR"/
+                chmod -R u+rwX "$PRESETS_DIR" 2>/dev/null || true
+                break
+            fi
+        done
     fi
 }
 
@@ -89,7 +149,7 @@ ensure_active_preset() {
     if [[ ! -d "${PRESETS_DIR}/${active_name}" ]]; then
         active_name="nk_cream"
         if [[ ! -d "${PRESETS_DIR}/${active_name}" ]]; then
-            active_name=$(ls -1 "$PRESETS_DIR" 2>/dev/null | head -n 1 || echo "")
+            active_name=$(find "$PRESETS_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | head -n 1 || echo "")
         fi
     fi
     if [[ -n "$active_name" && -d "${PRESETS_DIR}/${active_name}" ]]; then
@@ -107,11 +167,12 @@ get_sink_mode() {
 }
 
 set_sink_mode() {
+    mkdir -p "$CONFIG_DIR"
     local mode="$1"
     case "$mode" in
         direct|hardware|hw)
             echo "direct" > "$SINK_FILE"
-            notify_user "Audio Routing: Direct Hardware DAC (0 ms)"
+            notify_user "Audio Routing: Direct Hardware DAC (Low-Latency)"
             printf "%b[SINK]%b Audio Routing: Direct physical DAC / Headphone Amp\n" "${C_GREEN}" "${C_RESET}"
             ;;
         surround|3d|spatial)
@@ -129,7 +190,7 @@ set_sink_mode() {
             exit 1
             ;;
     esac
-    if pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; then
+    if is_daemon_running; then
         start_engine
     fi
 }
@@ -143,25 +204,24 @@ get_volume() {
 }
 
 set_volume() {
+    mkdir -p "$CONFIG_DIR"
     local raw="$1"
-    local parsed="0.75"
-    if [[ "$raw" =~ ^[0-9]+$ ]]; then
-        if (( raw > 1 )); then
-            parsed=$(python3 -c "print(min(2.0, max(0.0, $raw / 100.0)))" 2>/dev/null || echo "0.75")
-        else
-            parsed="$raw"
-        fi
-    elif [[ "$raw" =~ ^[0-9]*\.[0-9]+$ ]]; then
-        parsed=$(python3 -c "print(min(2.0, max(0.0, float('$raw'))))" 2>/dev/null || echo "0.75")
-    fi
+    local parsed
+    parsed=$(awk -v val="$raw" 'BEGIN {
+        v = val + 0.0;
+        if (v > 2.0) v = v / 100.0;
+        if (v < 0.0) v = 0.0;
+        if (v > 2.0) v = 2.0;
+        printf "%.2f", v;
+    }' 2>/dev/null || echo "0.75")
 
     echo "$parsed" > "$VOLUME_FILE"
     local pct
-    pct=$(python3 -c "print(int(round(float('$parsed') * 100)))" 2>/dev/null || echo "75")
+    pct=$(awk -v val="$parsed" 'BEGIN { printf "%d", int(val * 100 + 0.5) }' 2>/dev/null || echo "75")
     printf "%b[VOLUME]%b Volume set to: %s (%s%%)\n" "${C_GREEN}" "${C_RESET}" "$parsed" "$pct"
 
     # Send SIGUSR2 to hot-reload without restart
-    pkill -USR2 -x "clickclick" 2>/dev/null || pkill -USR2 -x "clickclick_rs" 2>/dev/null || true
+    signal_daemon USR2
 }
 
 get_humanize() {
@@ -173,6 +233,7 @@ get_humanize() {
 }
 
 set_humanize() {
+    mkdir -p "$CONFIG_DIR"
     local val="$1"
     local cur
     cur=$(get_humanize)
@@ -196,11 +257,47 @@ set_humanize() {
         notify_user "Humanization: Disabled"
         printf "%b[HUMANIZE]%b Organic keystroke variation: Disabled\n" "${C_YELLOW}" "${C_RESET}"
     fi
-    pkill -USR2 -x "clickclick" 2>/dev/null || pkill -USR2 -x "clickclick_rs" 2>/dev/null || true
+    signal_daemon USR2
+}
+
+get_mice() {
+    if [[ -f "$MICE_FILE" ]]; then
+        cat "$MICE_FILE"
+    else
+        echo "true"
+    fi
+}
+
+set_mice() {
+    mkdir -p "$CONFIG_DIR"
+    local val="$1"
+    local cur
+    cur=$(get_mice)
+    local next="true"
+    case "$val" in
+        on|true|1|enable)
+            next="true"
+            ;;
+        off|false|0|disable)
+            next="false"
+            ;;
+        toggle)
+            if [[ "$cur" == "true" ]]; then next="false"; else next="true"; fi
+            ;;
+    esac
+    echo "$next" > "$MICE_FILE"
+    if [[ "$next" == "true" ]]; then
+        notify_user "Mouse Click Acoustics: Enabled"
+        printf "%b[MICE]%b Mouse click acoustics: Enabled\n" "${C_GREEN}" "${C_RESET}"
+    else
+        notify_user "Mouse Click Acoustics: Disabled"
+        printf "%b[MICE]%b Mouse click acoustics: Disabled\n" "${C_YELLOW}" "${C_RESET}"
+    fi
+    signal_daemon USR2
 }
 
 get_hardware_sink() {
-    if command -v pw-dump >/dev/null; then
+    if command -v pw-dump >/dev/null 2>&1; then
         pw-dump Node 2>/dev/null | python3 -c '
 import sys, json
 try:
@@ -224,22 +321,20 @@ show_status() {
     active=$(get_active_preset)
     local running="No"
     local pid=""
-    if pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; then
+    pid=$(get_daemon_pids | head -n 1 || true)
+    if [[ -n "$pid" ]]; then
         running="Yes"
-        pid=$(pgrep -x "clickclick" 2>/dev/null || pgrep -x "clickclick_rs" 2>/dev/null | head -n 1)
     fi
     local smode
     smode=$(get_sink_mode)
     local vol
     vol=$(get_volume)
     local vol_pct
-    vol_pct=$(python3 -c "print(int(float('$vol') * 100))" 2>/dev/null || echo "75")
+    vol_pct=$(awk -v val="$vol" 'BEGIN { printf "%d", int(val * 100 + 0.5) }' 2>/dev/null || echo "75")
     local hum
     hum=$(get_humanize)
-    local mouse="true"
-    if [[ -f "${CONFIG_DIR}/enable_mice.txt" ]]; then
-        mouse=$(cat "${CONFIG_DIR}/enable_mice.txt")
-    fi
+    local mouse
+    mouse=$(get_mice)
 
     printf "%b=== CLICKCLICK STATUS ===%b\n" "${C_CYAN}" "${C_RESET}"
     printf "  Running:       %b%s%b %s\n" "${C_GREEN}" "$running" "${C_RESET}" "${pid:+(PID: $pid)}"
@@ -251,8 +346,8 @@ show_status() {
 }
 
 reload_stream() {
-    if pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; then
-        pkill -USR1 -x "clickclick" 2>/dev/null || pkill -USR1 -x "clickclick_rs" 2>/dev/null || true
+    if is_daemon_running; then
+        signal_daemon USR1
         printf "%b[RELOAD]%b Stream re-anchored to audio sink (SIGUSR1).\n" "${C_GREEN}" "${C_RESET}"
         notify_user "Audio stream synchronized"
     else
@@ -281,6 +376,7 @@ list_presets() {
 }
 
 set_preset() {
+    ensure_presets_installed
     local target="$1"
     if [[ ! -d "${PRESETS_DIR}/${target}" ]]; then
         printf "%b[ERROR]%b Preset '%s' not found in %s\n" "${C_RED}" "${C_RESET}" "$target" "$PRESETS_DIR"
@@ -293,10 +389,8 @@ set_preset() {
 
     printf "%b[PRESET]%b Switched active preset to: %b%s%b\n" "${C_GREEN}" "${C_RESET}" "${C_CYAN}" "$target" "${C_RESET}"
 
-    if pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; then
-        pkill -x "clickclick" 2>/dev/null || true
-        pkill -x "clickclick_rs" 2>/dev/null || true
-        while pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; do sleep 0.1; done
+    if is_daemon_running; then
+        stop_daemon
         start_engine
     fi
 }
@@ -322,23 +416,21 @@ start_engine() {
     fi
 
     if [[ -z "$BIN_PATH" || ! -x "$BIN_PATH" ]]; then
-        printf "%b[BUILD]%b Compiling ClickClick in Rust (Release Mode)...\n" "${C_YELLOW}" "${C_RESET}"
+        printf "%b[BUILD]%b Compiling ClickClick daemon in Rust (Release Mode)...\n" "${C_YELLOW}" "${C_RESET}"
         cd "$REPO_DIR"
-        if command -v nix-shell >/dev/null; then
+        if command -v nix-shell >/dev/null 2>&1; then
             nix-shell -p cargo rustc pkg-config alsa-lib --run "cargo build --release"
-        elif command -v cargo >/dev/null; then
+        elif command -v cargo >/dev/null 2>&1; then
             cargo build --release
         else
-            printf "%b[ERROR]%b cargo command not found.\n" "${C_RED}" "${C_RESET}"
+            printf "%b[ERROR]%b clickclickd binary and cargo not found.\n" "${C_RED}" "${C_RESET}"
             exit 1
         fi
-        BIN_PATH="$REPO_DIR/target/release/clickclick"
+        BIN_PATH="$REPO_DIR/target/release/clickclickd"
     fi
 
-    local enable_mice_val="true"
-    if [[ -f "${CONFIG_DIR}/enable_mice.txt" ]]; then
-        enable_mice_val=$(cat "${CONFIG_DIR}/enable_mice.txt")
-    fi
+    local enable_mice_val
+    enable_mice_val=$(get_mice)
 
     local sink_mode_val
     sink_mode_val=$(get_sink_mode)
@@ -375,15 +467,15 @@ start_engine() {
     export ENABLE_MICE="$enable_mice_val"
     export PIPEWIRE_LATENCY="64/48000"
 
-    pkill -x "clickclick" 2>/dev/null || true
-    pkill -x "clickclick_rs" 2>/dev/null || true
-    while pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; do sleep 0.1; done
+    stop_daemon
 
     nohup "$BIN_PATH" "$target_dir" >/tmp/clickclick.log 2>&1 &
-    sleep 0.2
+    local launched_pid=$!
+    echo "$launched_pid" > "$PID_FILE"
+    sleep 0.25
 
-    if pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; then
-        printf "%b[OK]%b Engine running in background.\n" "${C_GREEN}" "${C_RESET}"
+    if is_daemon_running; then
+        printf "%b[OK]%b Engine running in background (PID: %s).\n" "${C_GREEN}" "${C_RESET}" "$(get_daemon_pids | head -n 1)"
     else
         printf "%b[ERROR]%b Engine failed to start. Log output:\n" "${C_RED}" "${C_RESET}"
         tail -n 10 /tmp/clickclick.log || true
@@ -392,28 +484,40 @@ start_engine() {
 }
 
 open_gui() {
-    local gui_script="$REPO_DIR/ui/clickclick_gui.py"
-    if [[ ! -f "$gui_script" ]]; then
-        gui_script="/usr/local/bin/clickclick-settings"
-    fi
-    if [[ ! -f "$gui_script" ]]; then
-        gui_script="/usr/bin/clickclick-settings"
-    fi
-    if command -v python3 >/dev/null && [[ -f "$gui_script" ]]; then
-        python3 "$gui_script" &
-    elif command -v clickclick-settings >/dev/null; then
+    if [[ -x "$SCRIPT_DIR/clickclick-settings" ]]; then
+        "$SCRIPT_DIR/clickclick-settings" &
+    elif [[ -f "$REPO_DIR/ui/clickclick_gui.py" ]]; then
+        python3 "$REPO_DIR/ui/clickclick_gui.py" &
+    elif [[ -f "$REPO_DIR/lib/clickclick/clickclick_gui.py" ]]; then
+        python3 "$REPO_DIR/lib/clickclick/clickclick_gui.py" &
+    elif command -v clickclick-settings >/dev/null 2>&1; then
         clickclick-settings &
+    elif [[ -x "/usr/local/bin/clickclick-settings" ]]; then
+        /usr/local/bin/clickclick-settings &
+    elif [[ -x "/usr/bin/clickclick-settings" ]]; then
+        /usr/bin/clickclick-settings &
     else
-        printf "%b[ERROR]%b GUI application not found.\n" "${C_RED}" "${C_RESET}"
+        printf "%b[ERROR]%b GUI application (clickclick-settings) not found.\n" "${C_RED}" "${C_RESET}"
         exit 1
     fi
 }
 
 test_click() {
     ensure_active_preset
-    local sound_file="${ACTIVE_LINK}/space.wav"
-    if [[ ! -f "$sound_file" ]]; then sound_file="${ACTIVE_LINK}/enter.wav"; fi
-    if [[ ! -f "$sound_file" ]]; then sound_file=$(ls -1 "${ACTIVE_LINK}"/*.wav 2>/dev/null | head -n 1 || echo ""); fi
+    local sound_file=""
+    for cand in \
+        "${ACTIVE_LINK}/space.wav" \
+        "${ACTIVE_LINK}/enter.wav" \
+        "${ACTIVE_LINK}/key_57.ogg" \
+        "${ACTIVE_LINK}/key_28.ogg"; do
+        if [[ -f "$cand" ]]; then
+            sound_file="$cand"
+            break
+        fi
+    done
+    if [[ -z "$sound_file" ]]; then
+        sound_file=$(find -L "${ACTIVE_LINK}" -maxdepth 1 -type f \( -name '*.wav' -o -name '*.ogg' \) 2>/dev/null | sort | head -n 1 || echo "")
+    fi
     if [[ -n "$sound_file" && -f "$sound_file" ]]; then
         printf "%b[TEST]%b Playing click sample: %s\n" "${C_CYAN}" "${C_RESET}" "$sound_file"
         pw-play "$sound_file" 2>/dev/null || paplay "$sound_file" 2>/dev/null || aplay "$sound_file" 2>/dev/null || true
@@ -466,6 +570,10 @@ case "$CMD" in
         set_humanize "${2:-toggle}"
         exit 0
         ;;
+    mice|mouse)
+        set_mice "${2:-toggle}"
+        exit 0
+        ;;
     reload|refresh)
         reload_stream
         exit 0
@@ -478,18 +586,20 @@ case "$CMD" in
         start_engine
         exit 0
         ;;
+    restart)
+        start_engine
+        exit 0
+        ;;
     stop)
-        pkill -x "clickclick" 2>/dev/null || true
-        pkill -x "clickclick_rs" 2>/dev/null || true
+        stop_daemon
         notify_user "Disabled"
         printf "%b[STOP]%b ClickClick stopped.\n" "${C_YELLOW}" "${C_RESET}"
         exit 0
         ;;
     toggle)
-        if pgrep -x "clickclick" >/dev/null || pgrep -x "clickclick_rs" >/dev/null; then
+        if is_daemon_running; then
             printf "%b[TOGGLE]%b Stopping active instance...\n" "${C_YELLOW}" "${C_RESET}"
-            pkill -x "clickclick" 2>/dev/null || true
-            pkill -x "clickclick_rs" 2>/dev/null || true
+            stop_daemon
             notify_user "Disabled"
             exit 0
         else
@@ -501,7 +611,7 @@ case "$CMD" in
         printf "Usage: clickclick [command] [args]\n\n"
         printf "Commands:\n"
         printf "  gui               Open Libadwaita settings application\n"
-        printf "  start             Start background audio engine\n"
+        printf "  start             Start background audio engine (clickclickd)\n"
         printf "  stop              Stop background audio engine\n"
         printf "  toggle            Toggle engine on/off\n"
         printf "  status            Display engine status, routing, and volume\n"
@@ -509,11 +619,17 @@ case "$CMD" in
         printf "  preset <name>     Switch active preset (e.g. nk_cream)\n"
         printf "  volume <0-100>    Set feedback volume level\n"
         printf "  humanize [on|off] Toggle organic pitch & velocity micro-jitter\n"
+        printf "  mice [on|off]     Toggle mouse button click acoustics\n"
         printf "  sink <mode>       Set routing: direct, surround, or default\n"
         printf "  test              Play a test click from active preset\n"
         exit 0
         ;;
+    --version|-V|version)
+        printf "clickclick 1.0.0\n"
+        exit 0
+        ;;
     *)
+        ensure_presets_installed
         if [[ -d "${PRESETS_DIR}/${CMD}" ]]; then
             set_preset "$CMD"
         else
