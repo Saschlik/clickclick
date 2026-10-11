@@ -62,7 +62,7 @@ class ClickClickWindow(Adw.ApplicationWindow):
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         title_box.set_valign(Gtk.Align.CENTER)
         h_title = Gtk.Label(label="ClickClick", css_classes=["title"])
-        h_sub = Gtk.Label(label="Mechanical Keyboard &amp; Mouse Acoustics", css_classes=["subtitle", "caption"])
+        h_sub = Gtk.Label(label="Mechanical Keyboard & Mouse Acoustics", css_classes=["subtitle", "caption"])
         title_box.append(h_title)
         title_box.append(h_sub)
         header.set_title_widget(title_box)

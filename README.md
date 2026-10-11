@@ -103,6 +103,10 @@ clickclick gui
 clickclick-settings
 ```
 
+<p align="center">
+  <img src="assets/screenshot_desktop.png" alt="ClickClick Running on Desktop" width="90%">
+</p>
+
 ### Command Line Control
 ```bash
 clickclick start            # Start background daemon
