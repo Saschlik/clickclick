@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+*.log
+*.tmp
+.env
+__pycache__/
+*.pyc
+result
+result-*
+.direnv/

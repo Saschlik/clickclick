@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=ClickClick
+GenericName=Mechanical Keyboard Acoustics
+Comment=Ultra-low latency mechanical keyboard & mouse acoustic feedback
+Exec=clickclick gui
+Icon=input-keyboard
+Terminal=false
+Type=Application
+Categories=Utility;AudioVideo;Audio;Settings;
+Keywords=keyboard;switch;click;audio;pipewire;mechanical;
+StartupNotify=true
