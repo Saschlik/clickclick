@@ -378,7 +378,7 @@ list_presets() {
 set_preset() {
     ensure_presets_installed
     local target="$1"
-    if [[ ! -d "${PRESETS_DIR}/${target}" ]]; then
+    if [[ -z "$target" || "$target" == "." || "$target" == ".." || "$target" == *"/"* || ! -d "${PRESETS_DIR}/${target}" ]]; then
         printf "%b[ERROR]%b Preset '%s' not found in %s\n" "${C_RED}" "${C_RESET}" "$target" "$PRESETS_DIR"
         notify_user "Preset '$target' not found!"
         exit 1
